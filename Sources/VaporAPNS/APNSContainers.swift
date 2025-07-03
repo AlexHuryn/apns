@@ -1,5 +1,6 @@
 import Vapor
 import APNS
+import Logging
 #if canImport(Darwin)
 import Foundation
 #else
@@ -12,7 +13,7 @@ import NIOConcurrencyHelpers
 
 public typealias APNSGenericClient = APNSClient<JSONDecoder, JSONEncoder>
 
-public final class APNSContainers: Sendable {
+public final actor APNSContainers: Sendable {
     public struct ID: Sendable, Hashable, Codable {
         public let string: String
         public init(string: String) {
@@ -30,22 +31,26 @@ public final class APNSContainers: Sendable {
         }
     }
 
-    private let storage: NIOLockedValueBox<(containers: [ID: Container], defaultID: ID?)>
+    private var containers: [ID: Container]
+    private var defaultID: ID?
+    private let logger: Logger
 
     init() {
-        storage = .init((containers: [:], defaultID: nil))
+        self.containers =  [:]
+        self.defaultID = nil
+        self.logger = Logger(label: "codes.vapor.apns.containers")
     }
 
-    public func syncShutdown() {
-        storage.withLockedValue {
+    public func shutdown() async {
+        for container in self.containers.values {
             do {
-                try $0.containers.values.forEach { container in
-                    try container.client.syncShutdown()
-                }
+                try await container.client.shutdown()
             } catch {
-                fatalError("Could not shutdown APNS Containers")
+                // Log the error but continue shutting down other containers
+                logger.warning("Failed to shutdown APNS container", metadata: ["error": "\(error)"])
             }
         }
+        self.containers.removeAll()
     }
 }
 
@@ -171,37 +176,31 @@ extension APNSContainers {
         as id: ID,
         isDefault: Bool? = nil
     ) {
-        storage.withLockedValue {
-            $0.containers[id] = Container(
+        self.containers[id] = Container(
+            configuration: config,
+            client: APNSGenericClient(
                 configuration: config,
-                client: APNSGenericClient(
-                    configuration: config,
-                    eventLoopGroupProvider: eventLoopGroupProvider,
-                    responseDecoder: responseDecoder,
-                    requestEncoder: requestEncoder,
-                    byteBufferAllocator: byteBufferAllocator
-                )
+                eventLoopGroupProvider: eventLoopGroupProvider,
+                responseDecoder: responseDecoder,
+                requestEncoder: requestEncoder,
+                byteBufferAllocator: byteBufferAllocator
             )
-
-            if isDefault == true || ($0.defaultID == nil && isDefault != false) {
-                $0.defaultID = id
-            }
+        )
+        
+        if isDefault == true || (self.defaultID == nil && isDefault != false) {
+            self.defaultID = id
         }
     }
 
     public func `default`(to id: ID) {
-        storage.withLockedValue {
-            $0.defaultID = id
-        }
+        self.defaultID = id
     }
 
     public func container(for id: ID? = nil) -> APNSContainers.Container? {
-        storage.withLockedValue {
-            guard let id = id ?? $0.defaultID else {
-                return nil
-            }
-            return $0.containers[id]
+        guard let id = id ?? self.defaultID else {
+            return nil
         }
+        return self.containers[id]
     }
 
     public var container: APNSContainers.Container? {
