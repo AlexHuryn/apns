@@ -1,4 +1,4 @@
-// swift-tools-version:6.0
+// swift-tools-version:5.10
 import PackageDescription
 
 let package = Package(
@@ -11,7 +11,7 @@ let package = Package(
     .library(name: "VaporAPNS", targets: ["VaporAPNS"])
   ],
   dependencies: [
-    .package(url: "https://github.com/swift-server-community/APNSwift.git", from: "6.1.0"),
+    .package(url: "https://github.com/AlexHuryn/APNSwift.git", from: "6.2.1"),
     .package(url: "https://github.com/vapor/vapor.git", from: "4.110.1"),
   ],
   targets: [
